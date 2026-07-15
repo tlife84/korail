@@ -63,7 +63,7 @@ const HELP = `
   --children <n>          어린이 수 (기본 0)
   --infants <n>           유아 수 (기본 0)
   --seniors <n>           경로 수 (기본 0)
-  --seat-class <종류>      감시할 좌석: any | gen(일반실) | spe(특실) | standing(입석·자유석)  (기본 any)
+  --seat-class <종류>      감시할 좌석: gen(일반실) | any(일반실+특실) | spe(특실) | standing(입석·자유석)  (기본 gen)
   --trains <번호,번호>      특정 열차번호만 감시 (기본: 시간 이후 전체)
   --interval <초>          조회 주기 초 (기본 60, 최소 30 권장)
   --once                  1회만 조회하고 종료 (테스트용)
@@ -90,13 +90,14 @@ const CFG = {
   children: parseInt(args.children ?? '0'),
   infants: parseInt(args.infants ?? '0'),
   seniors: parseInt(args.seniors ?? '0'),
-  seatClass: (args['seat-class'] || 'any').toLowerCase(),
+  seatClass: (args['seat-class'] || 'gen').toLowerCase(),
   trains: args.trains ? args.trains.split(',').map(s => s.trim()) : null,
   interval: Math.max(15, parseInt(args.interval ?? '60')) * 1000,
   once: !!args.once,
   port: parseInt(args.port ?? '9222'),
   telegram: !args['no-telegram'],
 };
+CFG.totalPassengers = CFG.adults + CFG.children + CFG.infants + CFG.seniors;
 
 // ---------- telegram ----------
 const tgSend = async (text) => {
@@ -171,20 +172,66 @@ const buildParams = () => new URLSearchParams({
   txtTrnGpCd: '109', adjStnScdlOfrFlg: 'N', rtYn: 'N', txtCardPsgCnt: '0',
 }).toString();
 
-// 브라우저 컨텍스트 안에서 조회 API 호출
-const fetchSchedule = (page, body) => page.evaluate(async (body) => {
-  const resp = await fetch('https://www.korail.com/classes/com.korail.mobile.seatMovie.ScheduleView', {
+// 브라우저 컨텍스트 안에서 코레일 API 호출
+const fetchKorailApi = (page, path, body) => page.evaluate(async ({ path, body }) => {
+  const resp = await fetch(`https://www.korail.com${path}`, {
     method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body,
   });
   const text = await resp.text();
-  try { return { ok: true, json: JSON.parse(text) }; }
+  try { return { ok: resp.ok, json: JSON.parse(text) }; }
   catch { return { ok: false, text: text.slice(0, 200) }; }
-}, body);
+}, { path, body });
+
+const fetchSchedule = (page, body) => fetchKorailApi(
+  page,
+  '/classes/com.korail.mobile.seatMovie.ScheduleView',
+  body,
+);
+
+const apiFailed = (res) => !res.ok
+  || !!res.json?.errCode
+  || res.json?.strResult === 'FAIL'
+  || /^(ERR|WRG)/.test(res.json?.h_msg_cd || '');
+
+const apiErrorMessage = (res) => res.json?.errMsg
+  || res.json?.h_msg_txt
+  || res.text
+  || 'unknown';
+
+// 코레일 웹의 "좌석선택" 버튼과 같은 요청. 지정 승객 수가 함께 앉을 수 있는
+// 좌석 조합이 하나라도 있어야 응답에 srcar_infos(선택 가능한 호차)가 생긴다.
+const buildSeatMapParams = (t, psrmClCd) => new URLSearchParams({
+  Device: 'IP',
+  Version: '190617001',
+  txtMenuId: '11',
+  txtRunDt: t.h_run_dt || CFG.date,
+  txtDptDt: t.h_dpt_dt || t.h_run_dt || CFG.date,
+  txtTrnNo: t.h_trn_no || '',
+  txtDptTm: t.h_dpt_tm || '',
+  txtTrnClsfCd: t.h_trn_clsf_cd || '',
+  txtTrnGpCd: t.h_trn_gp_cd || '',
+  txtDptRsStnCd: t.h_dpt_rs_stn_cd || '',
+  txtArvRsStnCd: t.h_arv_rs_stn_cd || '',
+  txtPsrmClCd: psrmClCd, // 1=일반실, 2=특실
+  txtSeatAttCd: t.h_seat_att_cd || '015',
+  txtCustSrtCd: '',
+  txtDptStnRunOrdr: t.h_dpt_stn_run_ordr || '',
+  txtArvStnRunOrdr: t.h_arv_stn_run_ordr || '',
+  txtTotPsgCnt: String(CFG.totalPassengers),
+  langCode: 'ko',
+  txtGdNo: t.txtGdNo || '',
+}).toString();
+
+const fetchSeatMap = (page, t, psrmClCd) => fetchKorailApi(
+  page,
+  '/classes/com.korail.mobile.research.TrainResearch',
+  buildSeatMapParams(t, psrmClCd),
+);
 
 // raw fetch가 통과 상태인지 확인 (IRG000000이면 예열 완료)
 const verify = async (page) => {
   const res = await fetchSchedule(page, buildParams());
-  return res.ok && !res.json.errCode && res.json.h_msg_cd === 'IRG000000';
+  return !apiFailed(res) && res.json.h_msg_cd === 'IRG000000';
 };
 
 // dynaPath 예열 1회: 메인에서 조회 버튼 클릭 → SPA가 실제 조회를 수행하게 함
@@ -211,9 +258,9 @@ const primeUntilReady = async (page, attempts = 5) => {
 };
 
 const CLASS_FIELD = {
-  gen: ['h_gen_rsv_nm', '일반실'],
-  spe: ['h_spe_rsv_nm', '특실'],
-  standing: ['h_stnd_rsv_nm', '입석·자유석'],
+  gen: ['h_gen_rsv_nm', '일반실', '1'],
+  spe: ['h_spe_rsv_nm', '특실', '2'],
+  standing: ['h_stnd_rsv_nm', '입석·자유석', null],
 };
 
 const isSoldOut = (v) => !v || v === '매진' || v === '';
@@ -223,15 +270,39 @@ const availableSeats = (t) => {
   const out = [];
   if (CFG.seatClass === 'any') {
     if (t.h_rsv_psb_flg === 'Y') {
-      if (!isSoldOut(t.h_gen_rsv_nm)) out.push(['일반실', t.h_gen_rsv_nm]);
-      if (!isSoldOut(t.h_spe_rsv_nm)) out.push(['특실', t.h_spe_rsv_nm]);
-      if (!out.length) out.push(['예약가능', t.h_rsv_psb_nm || '']);
+      if (!isSoldOut(t.h_gen_rsv_nm)) out.push({ label: '일반실', state: t.h_gen_rsv_nm, psrmClCd: '1' });
+      if (!isSoldOut(t.h_spe_rsv_nm)) out.push({ label: '특실', state: t.h_spe_rsv_nm, psrmClCd: '2' });
+      // 등급이 명시되지 않는 예약 가능 상태(입석 등)는 기본 any에서 공석으로 보지 않는다.
+      // 입석·자유석만 감시하려면 --seat-class standing을 명시해야 한다.
     }
   } else {
-    const [field, label] = CLASS_FIELD[CFG.seatClass] || CLASS_FIELD.gen;
-    if (!isSoldOut(t[field])) out.push([label, t[field]]);
+    const [field, label, psrmClCd] = CLASS_FIELD[CFG.seatClass] || CLASS_FIELD.gen;
+    if (!isSoldOut(t[field])) out.push({ label, state: t[field], psrmClCd });
   }
   return out;
+};
+
+// selectable: true=웹에서 좌석선택 가능, false=선택 가능한 호차 없음,
+// null=통신/차단 오류라 판정 보류(기존 알림 상태도 유지)
+const hasSelectableSeats = async (page, t, seat) => {
+  if (!seat.psrmClCd) return { selectable: true, carCount: null };
+
+  let res = await fetchSeatMap(page, t, seat.psrmClCd);
+  if (apiFailed(res)) {
+    console.warn(`[좌석검증] ${t.h_trn_no} ${seat.label} 조회 오류 → 재예열`);
+    if (await primeUntilReady(page, 3)) res = await fetchSeatMap(page, t, seat.psrmClCd);
+  }
+  if (apiFailed(res)) {
+    const detail = apiErrorMessage(res).slice(0, 80);
+    console.warn(`[좌석검증] ${t.h_trn_no} ${seat.label} 판정 보류: ${detail}`);
+    return { selectable: null, carCount: null };
+  }
+
+  const cars = res.json.srcar_infos?.srcar_info;
+  return {
+    selectable: Array.isArray(cars) && cars.length > 0,
+    carCount: Array.isArray(cars) ? cars.length : 0,
+  };
 };
 
 const alerted = new Set(); // "trnNo|label" 중복 알림 방지 (매진되면 해제)
@@ -240,13 +311,13 @@ const cycle = async (page) => {
   const body = buildParams();
   let res = await fetchSchedule(page, body);
   // 토큰 만료/차단 시 재예열 후 재시도
-  if (!res.ok || res.json.errCode) {
+  if (apiFailed(res)) {
     console.warn('[감시] 신뢰 상태 만료 → 재예열');
     await primeUntilReady(page, 3);
     res = await fetchSchedule(page, body);
   }
-  if (!res.ok || res.json.errCode) {
-    console.warn(`[감시] 조회 실패(다음 주기 재시도): ${res.json?.errMsg?.slice(0, 40) || res.text || 'unknown'}`);
+  if (apiFailed(res)) {
+    console.warn(`[감시] 조회 실패(다음 주기 재시도): ${apiErrorMessage(res).slice(0, 80)}`);
     return;
   }
   const allTrains = res.json.trn_infos?.trn_info || [];
@@ -263,30 +334,43 @@ const cycle = async (page) => {
   for (const t of trains) {
     const no = t.h_trn_no;
     if (CFG.trains && !CFG.trains.includes(no)) continue;
-    const clsf = (t.h_trn_clsf_nm || '') + (t.h_trn_gp_cd ? '' : '');
     const name = `${t.h_trn_clsf_nm || 'KTX'} ${no}`;
-    const seats = availableSeats(t);
-    statusLine.push(`${no}:${seats.length ? '🟢' : '·'}`);
-    for (const [label] of seats) {
-      const key = `${no}|${label}`;
+    const candidates = availableSeats(t);
+    const seats = [];
+    let verificationUnknown = false;
+    for (const seat of candidates) {
+      const verified = await hasSelectableSeats(page, t, seat);
+      if (verified.selectable === true) seats.push({ ...seat, carCount: verified.carCount });
+      if (verified.selectable === null) verificationUnknown = true;
+    }
+    const marker = seats.length ? '🟢' : verificationUnknown ? '?' : candidates.length ? '🟡' : '·';
+    statusLine.push(`${no}:${marker}`);
+    for (const seat of seats) {
+      const key = `${no}|${seat.label}`;
       if (!alerted.has(key)) {
         alerted.add(key);
-        hits.push({ name, no, dep: t.h_dpt_tm_qb, arv: t.h_arv_tm_qb, label,
+        hits.push({ name, no, dep: t.h_dpt_tm_qb, arv: t.h_arv_tm_qb, label: seat.label,
+          carCount: seat.carCount, seatSelectable: !!seat.psrmClCd,
           price: (t.h_rsv_psb_nm || '').split('\n')[0] });
       }
     }
-    // 다시 매진되면 알림 해제(재오픈 시 재알림)
-    if (!seats.length) {
-      for (const label of ['일반실', '특실', '입석·자유석', '예약가능']) alerted.delete(`${no}|${label}`);
+    // 매진 또는 좌석조합 불가로 바뀌면 등급별 알림을 해제한다.
+    // 검증 자체가 실패한 경우에는 상태를 보류해 중복 알림을 막는다.
+    if (!verificationUnknown) {
+      const selectableLabels = new Set(seats.map(seat => seat.label));
+      for (const label of ['일반실', '특실', '입석·자유석', '예약가능']) {
+        if (!selectableLabels.has(label)) alerted.delete(`${no}|${label}`);
+      }
     }
   }
   const rangeLabel = CFG.timeToLabel ? `${CFG.timeLabel}~${CFG.timeToLabel}` : `${CFG.timeLabel}~`;
   console.log(`[${now}] ${CFG.from}→${CFG.to} ${CFG.date} ${rangeLabel} | 대상 ${trains.length}/${allTrains.length}개 | ${statusLine.join(' ')}`);
 
   if (hits.length) {
-    const lines = hits.map(h => `🚄 <b>${h.name}</b>  ${h.dep}→${h.arv}\n   ${h.label} 예약가능 ${h.price ? '(' + h.price + ')' : ''}`);
+    const lines = hits.map(h => `🚄 <b>${h.name}</b>  ${h.dep}→${h.arv}\n   ${h.label} ${h.seatSelectable ? `좌석선택 가능${h.carCount ? ` (${h.carCount}개 호차)` : ''}` : '예약가능'} ${h.price ? '(' + h.price + ')' : ''}`);
     const msg = `<b>🟢 코레일 공석 발생!</b>\n${CFG.from} → ${CFG.to}  ${args.date} ${rangeLabel}\n\n${lines.join('\n')}\n\n👉 코레일 앱/웹에서 서둘러 예매하세요.`;
-    console.log('  → 공석! 텔레그램 전송:', hits.map(h => `${h.name}(${h.label})`).join(', '));
+    const action = CFG.telegram ? '텔레그램 전송' : '콘솔 알림(--no-telegram)';
+    console.log(`  → 공석! ${action}:`, hits.map(h => `${h.name}(${h.label})`).join(', '));
     await tgSend(msg);
   }
 };
