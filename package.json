@@ -7,6 +7,7 @@
     "korail-watch": "./watch.js"
   },
   "scripts": {
+    "ui": "node launcher.js",
     "watch": "node watch.js",
     "test": "node --test"
   },
