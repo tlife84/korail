@@ -7,7 +7,8 @@
     "korail-watch": "./watch.js"
   },
   "scripts": {
-    "watch": "node watch.js"
+    "watch": "node watch.js",
+    "test": "node --test"
   },
   "dependencies": {
     "playwright": "^1.61.1"
