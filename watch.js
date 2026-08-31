@@ -19,6 +19,16 @@ import { dirname, resolve } from 'node:path';
 import { chooseBestSeatOption } from './seat-selection.js';
 import { buildReservationBody } from './reservation-params.js';
 import { readEnvFile, resolveCredentials, credentialWarnings } from './env-config.js';
+import {
+  ENDPOINTS, buildScheduleBody, buildSeatMapBody, buildSeatListBody,
+  apiFailed, apiErrorMessage, isPrimed, sessionExpired, reservationFailed,
+} from './korail-api.js';
+import { availableSeats, withinDepartureRange, statusMarker } from './seat-availability.js';
+import { createAlertTracker } from './alert-state.js';
+import {
+  escapeHtml, departureRangeLabel,
+  buildVacancyMessage, buildReservationMessage,
+} from './notify-message.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -224,14 +234,7 @@ const ensureChrome = async () => {
 };
 
 // ---------- korail ----------
-const buildParams = () => new URLSearchParams({
-  Device: 'IP', Version: '190617001', radJobId: '1', txtMenuId: '11', selGoTrain: '05',
-  txtGoAbrdDt: CFG.date, txtGoStart: CFG.from, txtGoEnd: CFG.to, txtGoHour: CFG.hour,
-  txtPsgFlg_1: String(CFG.adults), txtPsgFlg_2: String(CFG.children),
-  txtPsgFlg_3: String(CFG.seniors), txtPsgFlg_4: String(CFG.infants), txtPsgFlg_5: '0',
-  txtSeatAttCd_2: '000', txtSeatAttCd_3: '000', txtSeatAttCd_4: '015',
-  txtTrnGpCd: '109', adjStnScdlOfrFlg: 'N', rtYn: 'N', txtCardPsgCnt: '0',
-}).toString();
+const buildParams = () => buildScheduleBody(CFG);
 
 // 브라우저 컨텍스트 안에서 코레일 API 호출
 const fetchKorailApi = (page, path, body) => page.evaluate(async ({ path, body }) => {
@@ -252,7 +255,7 @@ const fetchKorailGet = (page, path) => page.evaluate(async (path) => {
 
 const loginStatus = async (page) => {
   try {
-    const res = await fetchKorailGet(page, '/ebizweb/common/loginCheck');
+    const res = await fetchKorailGet(page, ENDPOINTS.loginCheck);
     const loggedIn = !!res.ok && res.json?.strResult === 'SUCC' && !res.json?.h_msg_cd;
     return { loggedIn, data: res.json || null };
   } catch {
@@ -320,72 +323,32 @@ const waitForManualLogin = async (page) => {
 
 const fetchSchedule = (page, body) => fetchKorailApi(
   page,
-  '/classes/com.korail.mobile.seatMovie.ScheduleView',
+  ENDPOINTS.schedule,
   body,
 );
 
-const apiFailed = (res) => !res.ok
-  || !!res.json?.errCode
-  || res.json?.strResult === 'FAIL'
-  || /^(ERR|WRG)/.test(res.json?.h_msg_cd || '');
-
-const apiErrorMessage = (res) => res.json?.errMsg
-  || res.json?.h_msg_txt
-  || res.text
-  || 'unknown';
-
-// 코레일 웹의 "좌석선택" 버튼과 같은 요청. 지정 승객 수가 함께 앉을 수 있는
-// 좌석 조합이 하나라도 있어야 응답에 srcar_infos(선택 가능한 호차)가 생긴다.
-const buildSeatMapParams = (t, psrmClCd) => new URLSearchParams({
-  Device: 'IP',
-  Version: '190617001',
-  txtMenuId: '11',
-  txtRunDt: t.h_run_dt || CFG.date,
-  txtDptDt: t.h_dpt_dt || t.h_run_dt || CFG.date,
-  txtTrnNo: t.h_trn_no || '',
-  txtDptTm: t.h_dpt_tm || '',
-  txtTrnClsfCd: t.h_trn_clsf_cd || '',
-  txtTrnGpCd: t.h_trn_gp_cd || '',
-  txtDptRsStnCd: t.h_dpt_rs_stn_cd || '',
-  txtArvRsStnCd: t.h_arv_rs_stn_cd || '',
-  txtPsrmClCd: psrmClCd, // 1=일반실, 2=특실
-  txtSeatAttCd: t.h_seat_att_cd || '015',
-  txtCustSrtCd: '',
-  txtDptStnRunOrdr: t.h_dpt_stn_run_ordr || '',
-  txtArvStnRunOrdr: t.h_arv_stn_run_ordr || '',
-  txtTotPsgCnt: String(CFG.totalPassengers),
-  langCode: 'ko',
-  txtGdNo: t.txtGdNo || '',
-}).toString();
+const buildSeatMapParams = (t, psrmClCd) => buildSeatMapBody(t, {
+  seatClassCode: psrmClCd,
+  date: CFG.date,
+  totalPassengers: CFG.totalPassengers,
+});
 
 const fetchSeatMap = (page, t, psrmClCd) => fetchKorailApi(
   page,
-  '/classes/com.korail.mobile.research.TrainResearch',
+  ENDPOINTS.seatMap,
   buildSeatMapParams(t, psrmClCd),
 );
 
-const buildSeatListParams = (t, psrmClCd, carNo) => new URLSearchParams({
-  Device: 'IP',
-  Version: '190617001',
-  runDt: t.h_run_dt || CFG.date,
-  trnNo: t.h_trn_no || '',
-  trnClsfCd: t.h_trn_clsf_cd || '',
-  trnGpCd: t.h_trn_gp_cd || '',
-  dptRsStnCd: t.h_dpt_rs_stn_cd || '',
-  arvRsStnCd: t.h_arv_rs_stn_cd || '',
-  psrmClCd,
-  seatAttCd: t.h_seat_att_cd || '015',
-  dptStnRunOrdr: t.h_dpt_stn_run_ordr || '',
-  arvStnRunOrdr: t.h_arv_stn_run_ordr || '',
-  totPsgCnt: String(CFG.totalPassengers),
-  srcarNo: String(carNo),
-  langCode: 'ko',
-  gdNo: t.txtGdNo || '',
-}).toString();
+const buildSeatListParams = (t, psrmClCd, carNo) => buildSeatListBody(t, {
+  seatClassCode: psrmClCd,
+  carNo,
+  date: CFG.date,
+  totalPassengers: CFG.totalPassengers,
+});
 
 const fetchSeatList = (page, t, psrmClCd, carNo) => fetchKorailApi(
   page,
-  '/classes/com.korail.mobile.research.TResidualSeatsResearch.do',
+  ENDPOINTS.seatList,
   buildSeatListParams(t, psrmClCd, carNo),
 );
 
@@ -439,23 +402,19 @@ const buildReservationParams = (t, seat, option) => {
   });
 };
 
-const reservationFailed = (res) => apiFailed(res)
-  || !['SUCC', 'SUCC_NULL'].includes(res.json?.strResult)
-  || res.json?.h_msg_cd === 'P058';
-
 const reserveSelectedSeats = async (page, t, seat, option) => {
   const body = buildReservationParams(t, seat, option);
   let res = await fetchKorailApi(
     page,
-    '/classes/com.korail.mobile.certification.TicketReservation',
+    ENDPOINTS.reservation,
     body,
   );
-  if (res.json?.h_msg_cd === 'P058') {
+  if (sessionExpired(res)) {
     console.warn('[예약] 로그인 세션이 만료되어 다시 로그인합니다.');
     await ensureLoggedIn(page);
     res = await fetchKorailApi(
       page,
-      '/classes/com.korail.mobile.certification.TicketReservation',
+      ENDPOINTS.reservation,
       body,
     );
   }
@@ -468,7 +427,7 @@ const reserveSelectedSeats = async (page, t, seat, option) => {
 // raw fetch가 통과 상태인지 확인 (IRG000000이면 예열 완료)
 const verify = async (page) => {
   const res = await fetchSchedule(page, buildParams());
-  return !apiFailed(res) && res.json.h_msg_cd === 'IRG000000';
+  return isPrimed(res);
 };
 
 // dynaPath 예열 1회: 메인에서 조회 버튼 클릭 → SPA가 실제 조회를 수행하게 함
@@ -492,31 +451,6 @@ const primeUntilReady = async (page, attempts = 5) => {
   }
   console.warn('[예열] 실패 — 계속 차단 상태입니다.');
   return false;
-};
-
-const CLASS_FIELD = {
-  gen: ['h_gen_rsv_nm', '일반실', '1'],
-  spe: ['h_spe_rsv_nm', '특실', '2'],
-  standing: ['h_stnd_rsv_nm', '입석·자유석', null],
-};
-
-const isSoldOut = (v) => !v || v === '매진' || v === '';
-
-// 열차 하나에서 감시 대상 좌석이 예약 가능한지 판정
-const availableSeats = (t) => {
-  const out = [];
-  if (CFG.seatClass === 'any') {
-    if (t.h_rsv_psb_flg === 'Y') {
-      if (!isSoldOut(t.h_gen_rsv_nm)) out.push({ label: '일반실', state: t.h_gen_rsv_nm, psrmClCd: '1' });
-      if (!isSoldOut(t.h_spe_rsv_nm)) out.push({ label: '특실', state: t.h_spe_rsv_nm, psrmClCd: '2' });
-      // 등급이 명시되지 않는 예약 가능 상태(입석 등)는 기본 any에서 공석으로 보지 않는다.
-      // 입석·자유석만 감시하려면 --seat-class standing을 명시해야 한다.
-    }
-  } else {
-    const [field, label, psrmClCd] = CLASS_FIELD[CFG.seatClass] || CLASS_FIELD.gen;
-    if (!isSoldOut(t[field])) out.push({ label, state: t[field], psrmClCd });
-  }
-  return out;
 };
 
 // selectable: true=웹에서 좌석선택 가능, false=선택 가능한 호차 없음,
@@ -543,39 +477,14 @@ const hasSelectableSeats = async (page, t, seat) => {
   };
 };
 
-const alerted = new Set(); // "trnNo|label" 중복 알림 방지 (매진되면 해제)
-
-const escapeHtml = (value) => String(value ?? '')
-  .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
-
-const rawTimeLabel = (value) => {
-  const digits = String(value || '').replace(/\D/g, '');
-  if (digits.length < 4) return String(value || '');
-  return `${digits.slice(0, 2)}:${digits.slice(2, 4)}`;
-};
-
-const reservationPaymentLabel = (data) => data.h_pay_limit_msg
-  || (data.h_stl_lmt_tm ? rawTimeLabel(String(data.h_stl_lmt_tm).slice(-6)) : '')
-  || '코레일 예약내역에서 확인';
+const alerts = createAlertTracker();
 
 const notifyReservationComplete = async (t, seat, option, data) => {
-  const name = `${t.h_trn_clsf_nm || 'KTX'} ${t.h_trn_no}`;
-  const seatLabels = option.seats.map(item => `${option.carNo}호차 ${item.seat_spec}`).join(', ');
-  const payment = reservationPaymentLabel(data);
-  const pnr = data.h_pnr_no || data.str_pnr_no || '';
-  const msg = [
-    '<b>✅ 코레일 예약 완료</b>',
-    `${escapeHtml(CFG.from)} → ${escapeHtml(CFG.to)}  ${escapeHtml(args.date)}`,
-    '',
-    `🚄 <b>${escapeHtml(name)}</b>  ${escapeHtml(t.h_dpt_tm_qb || rawTimeLabel(t.h_dpt_tm))}→${escapeHtml(t.h_arv_tm_qb || rawTimeLabel(t.h_arv_tm))}`,
-    `좌석: ${escapeHtml(seat.label)} / ${escapeHtml(seatLabels)}`,
-    pnr ? `예약번호: ${escapeHtml(pnr)}` : '',
-    `결제기한: ${escapeHtml(payment)}`,
-    '',
-    '👉 기한 내 코레일 앱/웹에서 결제하세요.',
-  ].filter((line, index, lines) => line || (index > 0 && lines[index - 1])).join('\n');
-  console.log(`  → 예약 완료: ${name} ${seatLabels} | 결제기한 ${payment}${pnr ? ` | 예약번호 ${pnr}` : ''}`);
-  await tgSend(msg);
+  const { message, summary } = buildReservationMessage({
+    from: CFG.from, to: CFG.to, dateLabel: args.date, train: t, seat, option, data,
+  });
+  console.log(`  → 예약 완료: ${summary}`);
+  await tgSend(message);
 };
 
 const cycle = async (page) => {
@@ -593,12 +502,7 @@ const cycle = async (page) => {
   }
   const allTrains = res.json.trn_infos?.trn_info || [];
   // 출발시각 범위 필터 (--time ~ --time-to)
-  const trains = allTrains.filter(t => {
-    const dep = parseInt((t.h_dpt_tm || '0').slice(0, 4)); // HHMM
-    if (dep < CFG.depFrom) return false;
-    if (CFG.depTo != null && dep > CFG.depTo) return false;
-    return true;
-  });
+  const trains = allTrains.filter(t => withinDepartureRange(t, CFG));
   const now = new Date().toLocaleTimeString('ko-KR');
   const hits = [];
   const statusLine = [];
@@ -606,7 +510,7 @@ const cycle = async (page) => {
     const no = t.h_trn_no;
     if (CFG.trains && !CFG.trains.includes(no)) continue;
     const name = `${t.h_trn_clsf_nm || 'KTX'} ${no}`;
-    const candidates = availableSeats(t);
+    const candidates = availableSeats(t, CFG.seatClass);
     const seats = [];
     let verificationUnknown = false;
     for (const seat of candidates) {
@@ -641,12 +545,14 @@ const cycle = async (page) => {
       }
       if (verified.selectable === null) verificationUnknown = true;
     }
-    const marker = seats.length ? '🟢' : verificationUnknown ? '?' : candidates.length ? '🟡' : '·';
+    const marker = statusMarker({
+      selectableCount: seats.length,
+      candidateCount: candidates.length,
+      verificationUnknown,
+    });
     statusLine.push(`${no}:${marker}`);
     for (const seat of seats) {
-      const key = `${no}|${seat.label}`;
-      if (!alerted.has(key)) {
-        alerted.add(key);
+      if (alerts.claim(no, seat.label)) {
         hits.push({ name, no, dep: t.h_dpt_tm_qb, arv: t.h_arv_tm_qb, label: seat.label,
           carCount: seat.carCount, seatSelectable: !!seat.psrmClCd,
           price: (t.h_rsv_psb_nm || '').split('\n')[0] });
@@ -654,19 +560,15 @@ const cycle = async (page) => {
     }
     // 매진 또는 좌석조합 불가로 바뀌면 등급별 알림을 해제한다.
     // 검증 자체가 실패한 경우에는 상태를 보류해 중복 알림을 막는다.
-    if (!verificationUnknown) {
-      const selectableLabels = new Set(seats.map(seat => seat.label));
-      for (const label of ['일반실', '특실', '입석·자유석', '예약가능']) {
-        if (!selectableLabels.has(label)) alerted.delete(`${no}|${label}`);
-      }
-    }
+    if (!verificationUnknown) alerts.release(no, seats.map(seat => seat.label));
   }
-  const rangeLabel = CFG.timeToLabel ? `${CFG.timeLabel}~${CFG.timeToLabel}` : `${CFG.timeLabel}~`;
+  const rangeLabel = departureRangeLabel(CFG.timeLabel, CFG.timeToLabel);
   console.log(`[${now}] ${CFG.from}→${CFG.to} ${CFG.date} ${rangeLabel} | 대상 ${trains.length}/${allTrains.length}개 | ${statusLine.join(' ')}`);
 
   if (hits.length) {
-    const lines = hits.map(h => `🚄 <b>${h.name}</b>  ${h.dep}→${h.arv}\n   ${h.label} ${h.seatSelectable ? `좌석선택 가능${h.carCount ? ` (${h.carCount}개 호차)` : ''}` : '예약가능'} ${h.price ? '(' + h.price + ')' : ''}`);
-    const msg = `<b>🟢 코레일 공석 발생!</b>\n${CFG.from} → ${CFG.to}  ${args.date} ${rangeLabel}\n\n${lines.join('\n')}\n\n👉 코레일 앱/웹에서 서둘러 예매하세요.`;
+    const msg = buildVacancyMessage({
+      from: CFG.from, to: CFG.to, dateLabel: args.date, rangeLabel, hits,
+    });
     const action = CFG.telegram ? '텔레그램 전송' : '콘솔 알림(--no-telegram)';
     console.log(`  → 공석! ${action}:`, hits.map(h => `${h.name}(${h.label})`).join(', '));
     await tgSend(msg);
