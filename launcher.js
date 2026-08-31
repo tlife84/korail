@@ -5,9 +5,11 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildWatchArgs, formatWatchCommand } from './launcher-options.js';
+import { readEnvFile, resolveCredentials, buildCredentialEnv, credentialWarnings } from './env-config.js';
 
 const projectDir = dirname(fileURLToPath(import.meta.url));
 const html = readFileSync(resolve(projectDir, 'launcher.html'), 'utf8');
+const envPath = resolve(projectDir, '.env');
 const host = '127.0.0.1';
 let watcherStarted = false;
 let pendingUiClose = null;
@@ -26,6 +28,14 @@ const scheduleUiClose = () => {
     console.log('[UI] 설정 화면이 닫혀 런처를 종료합니다.');
     server.close(() => process.exit(0));
   }, 1000);
+};
+
+const isSameOrigin = request => {
+  const site = request.headers['sec-fetch-site'];
+  if (site && site !== 'same-origin' && site !== 'none') return false;
+  const origin = request.headers.origin;
+  if (!origin) return true;
+  try { return new URL(origin).hostname === host; } catch { return false; }
 };
 
 const sendJson = (response, status, body) => {
@@ -59,6 +69,26 @@ const server = createServer(async (request, response) => {
     response.end(html);
     return;
   }
+  if (request.method === 'GET' && url.pathname === '/api/defaults') {
+    if (!isSameOrigin(request)) {
+      sendJson(response, 403, { ok: false, error: '이 설정 화면에서만 사용할 수 있습니다.' });
+      return;
+    }
+    cancelPendingUiClose();
+    const saved = resolveCredentials({}, readEnvFile(envPath));
+    response.setHeader('Cache-Control', 'no-store');
+    sendJson(response, 200, {
+      ok: true,
+      korailId: saved.korailId,
+      korailPw: saved.korailPw,
+      telegramToken: saved.telegramToken,
+      telegramChatIds: saved.telegramChatIds.join(','),
+      fromEnvFile: Object.fromEntries(
+        Object.entries(saved.sources).map(([field, source]) => [field, source === 'file']),
+      ),
+    });
+    return;
+  }
   if (request.method === 'GET' && url.pathname === '/api/health') {
     sendJson(response, 200, { ok: true });
     return;
@@ -74,23 +104,35 @@ const server = createServer(async (request, response) => {
       sendJson(response, 409, { ok: false, error: '이미 감시 프로그램을 실행했습니다.' });
       return;
     }
+    if (!isSameOrigin(request)) {
+      sendJson(response, 403, { ok: false, error: '이 설정 화면에서만 사용할 수 있습니다.' });
+      return;
+    }
     try {
       const input = await readJson(request);
       const args = buildWatchArgs(input);
+      // 비밀번호·토큰은 명령줄 인자가 아니라 환경변수로 넘긴다.
+      // 인자는 작업 관리자와 명령어 미리보기에 그대로 노출된다.
+      const credentialEnv = buildCredentialEnv(input);
+      const warnings = credentialWarnings(resolveCredentials(credentialEnv), {
+        reserve: input.mode === 'reserve',
+      });
       const command = formatWatchCommand(args);
       watcherStarted = true;
       cancelPendingUiClose();
       console.log(`\n[UI] 실행 명령\n${command}\n`);
+      for (const warning of warnings) console.warn(`[UI] 경고: ${warning}`);
       const child = spawn(process.execPath, [resolve(projectDir, 'watch.js'), ...args], {
         cwd: projectDir,
         stdio: 'inherit',
+        env: { ...process.env, ...credentialEnv },
       });
       child.on('error', error => {
         console.error(`[UI] 감시 프로그램을 시작하지 못했습니다: ${error.message}`);
         process.exitCode = 1;
       });
       child.on('close', code => process.exit(code ?? 1));
-      sendJson(response, 202, { ok: true, command });
+      sendJson(response, 202, { ok: true, command, warnings });
       setTimeout(() => server.close(), 500);
     } catch (error) {
       sendJson(response, 400, { ok: false, error: error.message });

@@ -36,3 +36,27 @@ test('출발역과 도착역은 사전 입력된 역 콤보박스를 사용한�
   assert.match(html, /<select name="to" required>[\s\S]*?<option value="광명">광명<\/option>[\s\S]*?<option value="서대전" selected>서대전<\/option>/);
   assert.doesNotMatch(html, /<input name="(?:from|to)"/);
 });
+
+test('계정과 텔레그램 설정을 화면에서 입력할 수 있다', () => {
+  for (const name of ['korailId', 'korailPw', 'telegramToken', 'telegramChatIds']) {
+    assert.match(html, new RegExp(`name="${name}"`));
+  }
+  assert.match(html, /name="korailPw" type="password"/);
+  assert.match(html, /name="telegramToken" type="password"/);
+  assert.match(html, /id="korail-notice"/);
+  assert.match(html, /id="telegram-notice"/);
+});
+
+test('저장된 .env 값을 기본값으로 불러온다', () => {
+  assert.match(html, /fetch\('\/api\/defaults'/);
+  assert.match(html, /loadSavedCredentials\(\)/);
+  assert.match(html, /.env에 저장된 값입니다/);
+  assert.match(html, /.env 값을 지웠습니다. 이번 실행에서는 사용하지 않습니다/);
+});
+
+test('계정이 없으면 경고를, 텔레그램이 없으면 안내만 보여준다', () => {
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.match(script, /notices\.korail = \['warn'/);
+  assert.match(script, /notices\.telegram = \['info'/);
+  assert.doesNotMatch(script, /notices\.telegram = \['warn'/);
+});

@@ -13,27 +13,18 @@
  */
 import { chromium } from 'playwright';
 import { spawn } from 'node:child_process';
-import { readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { chooseBestSeatOption } from './seat-selection.js';
 import { buildReservationBody } from './reservation-params.js';
+import { readEnvFile, resolveCredentials, credentialWarnings } from './env-config.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// ---------- .env ----------
-const loadEnv = () => {
-  const p = resolve(__dirname, '.env');
-  const env = {};
-  if (existsSync(p)) {
-    for (const line of readFileSync(p, 'utf8').split(/\r?\n/)) {
-      const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/i);
-      if (m) env[m[1]] = m[2];
-    }
-  }
-  return env;
-};
-const ENV = loadEnv();
+// ---------- 계정/알림 설정 ----------
+// 설정 화면에서 넘어온 환경변수가 있으면 그 값을, 없으면 .env 파일 값을 쓴다.
+const CREDS = resolveCredentials(process.env, readEnvFile(resolve(__dirname, '.env')));
 
 // ---------- args ----------
 const parseArgs = () => {
@@ -76,6 +67,11 @@ const HELP = `
   --port <n>              Chrome 원격 디버깅 포트 (기본 9222)
   --no-telegram           텔레그램 전송 안 함 (콘솔만)
   --help                  이 도움말
+
+계정·알림 값은 인자가 아니라 .env 파일이나 환경변수로 받는다 (설정 화면이 넘겨준다):
+  KORAIL_ID / KORAIL_PW          자동 로그인·예약용 계정 (없으면 --login 수동 로그인)
+  TELEGRAM_BOT_TOKEN             봇 토큰 (없으면 콘솔에만 출력)
+  TELEGRAM_CHAT_IDS              받을 대화 ID, 쉼표로 여러 명
 `;
 if (args.help) { console.log(HELP); process.exit(0); }
 
@@ -155,21 +151,19 @@ if (!CFG.loginOnly) {
     console.error('입석·자유석은 좌석을 직접 선택할 수 없어 자동 예약을 지원하지 않습니다.');
     process.exit(1);
   }
-  if (CFG.reserve && CFG.telegram) {
-    const telegramIds = ENV.TELEGRAM_CHAT_IDS || ENV.TELEGRAM_ADMIN_CHAT_ID;
-    if (!ENV.TELEGRAM_BOT_TOKEN || !telegramIds) {
-      console.error('자동 예약은 완료 알림을 위해 텔레그램 설정이 필요합니다. 테스트 시에만 --no-telegram을 명시하세요.');
-      process.exit(1);
-    }
+  // 텔레그램 정보가 없어도 실행은 막지 않는다. 콘솔 출력만 남기고 계속한다.
+  if (CFG.telegram && !CREDS.hasTelegram) CFG.telegram = false;
+  CFG.warnings = credentialWarnings(CREDS, { reserve: CFG.reserve });
+  if (CFG.reserve && !CFG.telegram) {
+    CFG.warnings.push('예약이 성공해도 텔레그램 알림을 보낼 수 없으니 터미널을 지켜보세요.');
   }
 }
 
 // ---------- telegram ----------
 const tgSend = async (text) => {
   if (!CFG.telegram) { return; }
-  const token = ENV.TELEGRAM_BOT_TOKEN;
-  const ids = (ENV.TELEGRAM_CHAT_IDS || ENV.TELEGRAM_ADMIN_CHAT_ID || '').split(',').map(s => s.trim()).filter(Boolean);
-  if (!token || !ids.length) { console.warn('[텔레그램] 토큰/chat_id 없음 (.env 확인)'); return; }
+  const { telegramToken: token, telegramChatIds: ids } = CREDS;
+  if (!token || !ids.length) { console.warn('[텔레그램] 봇 토큰/대화 ID 없음 (설정 화면 또는 .env 확인)'); return; }
   for (const id of ids) {
     try {
       const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
@@ -267,11 +261,11 @@ const loginStatus = async (page) => {
 };
 
 const loginWithCredentials = async (page) => {
-  const memberId = ENV.KORAIL_ID || ENV.KORAIL_MEMBER_ID;
-  const password = ENV.KORAIL_PW || ENV.KORAIL_PASSWORD;
+  const { korailId: memberId, korailPw: password } = CREDS;
   if (!memberId || !password) return false;
 
-  console.log('[로그인] .env 자격정보로 로그인 중...');
+  const origin = CREDS.sources.korailId === 'file' ? '.env' : '설정 화면';
+  console.log(`[로그인] ${origin} 계정(${memberId})으로 로그인 중...`);
   await page.goto('https://www.korail.com/ticket/login', { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.waitForTimeout(1500);
   const keySecurity = page.locator('#useKeySec');
@@ -302,7 +296,7 @@ const ensureLoggedIn = async (page) => {
     return true;
   }
   if (await loginWithCredentials(page)) return true;
-  throw new Error('로그인이 필요합니다. .env에 KORAIL_ID/KORAIL_PW를 설정하세요.');
+  throw new Error('로그인이 필요합니다. 설정 화면에서 코레일 아이디·비밀번호를 입력하거나 .env에 KORAIL_ID/KORAIL_PW를 넣으세요. (node watch.js --login 으로 수동 로그인도 가능)');
 };
 
 const waitForManualLogin = async (page) => {
@@ -698,7 +692,11 @@ const main = async () => {
     const mode = CFG.reserve ? '자동 예약' : CFG.dryRunReserve ? '예약 시뮬레이션' : '알림 감시';
     console.log(`=== 코레일 공석 감시 시작 (${mode}) ===`);
     console.log(`조건: ${CFG.from}→${CFG.to} ${args.date} ${rangeLabel} | 어른${CFG.adults} 어린이${CFG.children} 유아${CFG.infants} 경로${CFG.seniors} | 좌석:${CFG.seatClass} | 주기:${CFG.interval / 1000}s`);
+    const account = CREDS.hasKorailLogin ? CREDS.korailId : '없음(저장된 세션/수동 로그인)';
+    const notify = CFG.telegram ? `텔레그램 ${CREDS.telegramChatIds.length}곳` : '터미널만';
+    console.log(`계정: ${account} | 알림: ${notify}`);
     if (CFG.reserve) console.log('안전장치: 첫 예약 1건이 성공하면 즉시 감시를 종료합니다. 결제는 자동으로 진행하지 않습니다.');
+    for (const warning of CFG.warnings ?? []) console.warn(`[경고] ${warning}`);
   }
   await ensureChrome();
   activeBrowser = await chromium.connectOverCDP(`http://127.0.0.1:${CFG.port}`);

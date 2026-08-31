@@ -68,3 +68,17 @@ test('콜론 없는 네 자리 시간을 24시간 형식으로 교정한다', ()
 test('교정 후에도 유효하지 않은 시간은 거부한다', () => {
   assert.throws(() => buildWatchArgs({ ...defaults, time: '2560' }), /시간은/);
 });
+
+test('계정과 토큰은 명령줄 인자에 넣지 않는다', () => {
+  const command = formatWatchCommand(buildWatchArgs({
+    ...defaults,
+    korailId: '1234567890',
+    korailPw: 'secret',
+    telegramToken: '123456789:AAEhBOweik6ad9r-6ujKvHqAbcdefGhIjKl',
+    telegramChatIds: '556744257',
+  }));
+
+  for (const secret of ['1234567890', 'secret', 'AAEhBOweik6ad9r', '556744257']) {
+    assert.doesNotMatch(command, new RegExp(secret));
+  }
+});
