@@ -136,6 +136,24 @@ node watch.js --date 2026-07-17 --time 12:00 --time-to 16:00 --from 광명 --to 
 - 콘솔 상태는 `🟢` 좌석선택 가능, `🟡` 예약가능 표시는 있으나 선택 가능한 좌석조합 없음, `·` 매진, `?` 좌석검증 일시 실패를 뜻합니다.
 - 같은 열차·좌석은 한 번만 알림하고, 다시 매진됐다가 재오픈되면 다시 알립니다.
 
+## 파일 구성
+
+감시 엔진(`watcher.js`)은 터미널을 모릅니다. 진행 상황은 이벤트(`log` `status` `found` `reserved` `error` `end`)로 흘려보내고 브라우저는 주입받으므로, CLI든 앱이든 같은 엔진을 씁니다.
+
+| 파일 | 역할 |
+| --- | --- |
+| `watch.js` | CLI. 인자를 읽고 엔진 이벤트를 터미널에 찍고 종료 코드를 정한다 |
+| `watcher.js` | 감시 엔진. 예열·조회·좌석검증·예약·알림의 순서와 재시도 |
+| `watch-config.js` | 인자 → 설정 변환과 검증 (`--help` 문구도 여기) |
+| `chrome.js` | 진짜 Chrome 실행 + CDP 접속. playwright를 쓰는 유일한 곳 |
+| `telegram.js` | 텔레그램 전송 |
+| `korail-api.js` | 코레일 요청 파라미터 조립과 응답 판정 |
+| `seat-availability.js` | 시간표 응답의 공석 판정·시각 필터·상태 표시 |
+| `seat-selection.js` / `reservation-params.js` | 좌석 고르기와 예약 요청 조립 |
+| `alert-state.js` / `notify-message.js` | 중복 알림 억제, 알림 문구 |
+| `env-config.js` | `.env`·환경변수의 계정·알림 설정 |
+| `launcher.js` / `launcher.html` / `launcher-options.js` | 설정 화면 |
+
 ## 주의
 
 - 조회 주기를 너무 짧게(30초 미만) 두지 마세요. 계정/IP 이용 제한 위험이 있습니다.
