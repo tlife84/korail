@@ -60,3 +60,28 @@ test('계정이 없으면 경고를, 텔레그램이 없으면 안내만 보여�
   assert.match(script, /notices\.telegram = \['info'/);
   assert.doesNotMatch(script, /notices\.telegram = \['warn'/);
 });
+
+test('실행 창구를 어댑터로 감싸 HTTP 런처와 앱 셸이 같은 화면을 쓴다', () => {
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.match(script, /const backend = window\.korail \?\? httpBackend/);
+  // 앱이 아닐 때 쓰는 HTTP 경로는 그대로 남아 있어야 한다
+  assert.match(script, /fetch\('\/api\/run'/);
+  assert.match(script, /backend\.loadDefaults\(\)/);
+  assert.match(script, /backend\.run\(data\)/);
+});
+
+test('앱 셸에서만 실행 로그 패널로 전환한다', () => {
+  assert.match(html, /<section class="card" id="run-view" hidden>/);
+  assert.match(html, /id="run-log"/);
+  assert.match(html, /id="stop-button"/);
+  assert.match(html, /id="back-button"/);
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.match(script, /if \(backend\.streaming\)/);
+  assert.match(script, /backend\.onLog\(appendLog\)/);
+});
+
+test('로그는 텍스트로만 넣어 화면에 태그가 실행되지 않게 한다', () => {
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1];
+  assert.match(script, /line\.textContent = /);
+  assert.doesNotMatch(script, /innerHTML/);
+});

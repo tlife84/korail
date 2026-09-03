@@ -74,7 +74,7 @@ export const ensureChrome = async ({ port, profileDir = DEFAULT_PROFILE_DIR, log
  * 이 모듈을 건드리지 않으면 무거운 의존성도 따라오지 않는다.
  */
 export const openChromeSession = async ({ port, profileDir, log = () => {} }) => {
-  const { chromium } = await import('playwright');
+  const { chromium } = await import('playwright-core');
   const proc = await ensureChrome({ port, profileDir, log });
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
   const context = browser.contexts()[0];

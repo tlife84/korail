@@ -108,7 +108,7 @@ export const buildCredentialEnv = (input = {}) => {
   if (chatIds.length) validateChatIds(chatIds);
   if (!!telegramToken !== !!chatIds.length) {
     const missing = telegramToken ? KOREAN_LABELS.telegramChatIds : KOREAN_LABELS.telegramToken;
-    throw new Error(`${missing}도 함께 입력하세요. 둘 다 비워두면 텔레그램 없이 콘솔에만 출력합니다.`);
+    throw new Error(`${missing}도 함께 입력하세요. 둘 다 비워두면 텔레그램 없이 진행 상황만 보여줍니다.`);
   }
 
   return {
@@ -128,6 +128,6 @@ export const credentialWarnings = ({ hasKorailLogin, hasTelegram }, { reserve = 
       ? '코레일 아이디·비밀번호가 없습니다. 전용 Chrome에 저장된 로그인 세션이 없으면 예약이 실패합니다. (node watch.js --login 으로 수동 로그인)'
       : '코레일 아이디·비밀번호가 없습니다. 자동 로그인과 좌석선택 예약을 사용할 수 없습니다.');
   }
-  if (!hasTelegram) warnings.push('텔레그램 봇 토큰·대화 ID가 없습니다. 알림 없이 터미널에만 출력합니다.');
+  if (!hasTelegram) warnings.push('텔레그램 봇 토큰·대화 ID가 없습니다. 알림 없이 진행 상황만 보여줍니다.');
   return warnings;
 };

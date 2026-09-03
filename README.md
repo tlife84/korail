@@ -19,8 +19,10 @@
 
 ```bash
 npm install
-npx playwright install chromium   # (이미 설치돼 있으면 생략)
 ```
+
+**Google Chrome이 설치돼 있어야 합니다.** 조회는 반드시 진짜 Chrome을 통해야 하므로
+(→ [왜 브라우저가 필요한가](#왜-브라우저가-필요한가)) 별도의 브라우저를 내려받지 않습니다.
 
 계정과 알림 정보는 `.env`에 저장해두거나, [설정 화면](#설정-화면으로-실행하기)에서
 그때그때 입력할 수 있습니다. 둘 다 없어도 알림 없이 감시만 하는 것은 가능합니다.
@@ -32,7 +34,7 @@ KORAIL_ID=1234567890
 KORAIL_PW=...
 ```
 
-- 텔레그램 값이 없으면 알림 대신 터미널에만 출력합니다(실행은 막지 않습니다).
+- 텔레그램 값이 없으면 알림 없이 진행 상황만 보여줍니다(실행은 막지 않습니다).
 - 코레일 계정이 없으면 자동 로그인·좌석선택 예약을 쓸 수 없고, 시작할 때 경고를 표시합니다.
 - `--reserve` 실행 시 기존 로그인 세션이 없으면 위 정보로 자동 로그인합니다.
 - 기존 `KORAIL_MEMBER_ID`, `KORAIL_PASSWORD` 이름도 호환됩니다. `.env`는 Git에서 제외됩니다.
@@ -45,8 +47,36 @@ node watch.js --login
 
 전용 Chrome 창에서 직접 로그인하면 세션이 `./.chrome-profile`에 저장됩니다.
 
-## 설정 화면으로 실행하기
+## 앱으로 실행하기 (권장)
 
+터미널 없이 창 하나로 끝냅니다. 설정 화면과 진행 로그가 같은 창에 있습니다.
+
+```bash
+npm run app
+```
+
+배포용 실행파일은 이렇게 만듭니다. `dist/korail-watch-0.1.0.exe` 하나만 복사하면
+어디서든 돌아가는 Windows portable exe입니다.
+
+```bash
+npm run dist
+```
+
+- **감시 시작**을 누르면 창이 로그 패널로 바뀝니다. 터미널에 찍히던 줄이 그대로 나옵니다.
+- 공석·예약·종료 시 **Windows 알림**이 뜹니다. 알림을 누르면 창이 올라옵니다.
+- 감시 중에 창을 닫으면 종료되지 않고 **트레이로 내려갑니다**. 트레이 아이콘에서 창을
+  다시 열거나 중지·종료할 수 있습니다. 트레이 툴팁에 마지막 조회 상태가 표시됩니다.
+- **감시 중지**를 누르면 진행 중인 주기를 기다리지 않고 바로 멈춥니다. 끝난 뒤
+  **설정으로 돌아가기**로 조건을 바꿔 다시 시작할 수 있습니다.
+- 조회는 앱이 아니라 여전히 **외부의 진짜 Chrome**이 합니다. 감시 중 그 Chrome 창은
+  열어두세요(최소화는 무방).
+- portable exe는 **exe와 같은 폴더의 `.env`**를 먼저 읽고, 없으면
+  `%APPDATA%\korail-watch\.env`를 봅니다. 크롬 프로필과 로그인 세션은
+  `%APPDATA%\korail-watch\chrome-profile`에 저장됩니다.
+
+## 설정 화면으로 실행하기 (터미널 방식)
+
+앱 대신 브라우저 설정 화면 + 터미널 조합도 그대로 쓸 수 있습니다.
 Windows에서는 [`korail-ui.cmd`](./korail-ui.cmd)를 더블클릭하세요. 브라우저에 로컬
 설정 화면이 열리며 날짜, 역, 시간대, 승객, 좌석 종류와 실행 방식을 선택할 수 있습니다.
 
@@ -138,21 +168,27 @@ node watch.js --date 2026-07-17 --time 12:00 --time-to 16:00 --from 광명 --to 
 
 ## 파일 구성
 
-감시 엔진(`watcher.js`)은 터미널을 모릅니다. 진행 상황은 이벤트(`log` `status` `found` `reserved` `error` `end`)로 흘려보내고 브라우저는 주입받으므로, CLI든 앱이든 같은 엔진을 씁니다.
+감시 엔진(`watcher.js`)은 터미널도 창도 모릅니다. 진행 상황은 이벤트(`log` `status` `found` `reserved` `error` `end`)로 흘려보내고 브라우저는 주입받으므로, 셸 세 개(CLI·HTTP 런처·Electron 앱)가 같은 엔진과 같은 설정 화면을 공유합니다.
 
 | 파일 | 역할 |
 | --- | --- |
 | `watch.js` | CLI. 인자를 읽고 엔진 이벤트를 터미널에 찍고 종료 코드를 정한다 |
 | `watcher.js` | 감시 엔진. 예열·조회·좌석검증·예약·알림의 순서와 재시도 |
 | `watch-config.js` | 인자 → 설정 변환과 검증 (`--help` 문구도 여기) |
-| `chrome.js` | 진짜 Chrome 실행 + CDP 접속. playwright를 쓰는 유일한 곳 |
+| `watch-request.js` | 설정 화면 입력 → 엔진 설정. 런처와 앱이 함께 쓴다 |
+| `chrome.js` | 진짜 Chrome 실행 + CDP 접속. playwright-core를 쓰는 유일한 곳 |
 | `telegram.js` | 텔레그램 전송 |
+| `app/main.js` | Electron 셸. 창·트레이·OS 알림·IPC와 엔진 수명 관리 |
+| `app/preload.cjs` | 렌더러에 `window.korail`만 노출하는 창구 |
+| `app/start.js` | `npm run app` 실행기. `ELECTRON_RUN_AS_NODE`를 지우고 띄운다 |
+| `app/make-icons.js` | 트레이·exe 아이콘 PNG 생성 (`npm run icons`) |
 | `korail-api.js` | 코레일 요청 파라미터 조립과 응답 판정 |
 | `seat-availability.js` | 시간표 응답의 공석 판정·시각 필터·상태 표시 |
 | `seat-selection.js` / `reservation-params.js` | 좌석 고르기와 예약 요청 조립 |
 | `alert-state.js` / `notify-message.js` | 중복 알림 억제, 알림 문구 |
 | `env-config.js` | `.env`·환경변수의 계정·알림 설정 |
-| `launcher.js` / `launcher.html` / `launcher-options.js` | 설정 화면 |
+| `launcher.js` / `launcher-options.js` | HTTP 설정 화면 서버와 입력 검증 |
+| `launcher.html` | 설정 화면. `window.korail`이 있으면 앱, 없으면 `fetch`로 런처에 붙는다 |
 
 ## 주의
 

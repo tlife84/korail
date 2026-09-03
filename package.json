@@ -3,15 +3,43 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "app/main.js",
   "bin": {
     "korail-watch": "./watch.js"
   },
   "scripts": {
+    "app": "node app/start.js",
     "ui": "node launcher.js",
     "watch": "node watch.js",
+    "icons": "node app/make-icons.js",
+    "dist": "electron-builder --win portable",
     "test": "node --test"
   },
   "dependencies": {
-    "playwright": "^1.61.1"
+    "playwright-core": "^1.61.1"
+  },
+  "devDependencies": {
+    "electron": "^44.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "kr.re.ktl.korail-watch",
+    "productName": "korail-watch",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "app/**/*",
+      "*.js",
+      "launcher.html",
+      "!*.test.js"
+    ],
+    "win": {
+      "target": "portable",
+      "icon": "app/icon.png"
+    },
+    "portable": {
+      "artifactName": "korail-watch-${version}.exe"
+    }
   }
 }

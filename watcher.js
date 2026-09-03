@@ -56,6 +56,12 @@ export const createWatcher = ({ config, creds = {}, deps = {} } = {}) => {
 
   const alerts = createAlertTracker();
 
+  // 엔진이 만드는 문구는 사람이 읽는 것이라 어디에 뜨는지에 따라 달라져야 한다.
+  // config.shell을 주지 않으면 지금까지의 CLI 문구를 그대로 쓴다.
+  const inApp = config.shell === 'app';
+  const NOWHERE_TO_SEND = inApp ? '앱 화면만' : '터미널만';
+  const CONSOLE_ONLY_ACTION = inApp ? '앱 화면 알림' : '콘솔 알림(--no-telegram)';
+
   // ---------- 코레일 호출 (브라우저 컨텍스트 안에서) ----------
   const fetchKorailApi = (page, path, body) => page.evaluate(async ({ path, body }) => {
     const resp = await fetch(`https://www.korail.com${path}`, {
@@ -369,7 +375,7 @@ export const createWatcher = ({ config, creds = {}, deps = {} } = {}) => {
       const message = buildVacancyMessage({
         from: config.from, to: config.to, dateLabel: config.dateLabel, rangeLabel, hits,
       });
-      const action = config.telegram ? '텔레그램 전송' : '콘솔 알림(--no-telegram)';
+      const action = config.telegram ? '텔레그램 전송' : CONSOLE_ONLY_ACTION;
       log(`  → 공석! ${action}: ${hits.map(hit => `${hit.name}(${hit.label})`).join(', ')}`);
       events.emit('found', { hits, message, rangeLabel });
       await sendTelegram(message);
@@ -385,7 +391,7 @@ export const createWatcher = ({ config, creds = {}, deps = {} } = {}) => {
     log(`=== 코레일 공석 감시 시작 (${mode}) ===`);
     log(`조건: ${config.from}→${config.to} ${config.dateLabel} ${rangeLabel} | 어른${config.adults} 어린이${config.children} 유아${config.infants} 경로${config.seniors} | 좌석:${config.seatClass} | 주기:${config.interval / 1000}s`);
     const account = creds.hasKorailLogin ? creds.korailId : '없음(저장된 세션/수동 로그인)';
-    const notify = config.telegram ? `텔레그램 ${(creds.telegramChatIds ?? []).length}곳` : '터미널만';
+    const notify = config.telegram ? `텔레그램 ${(creds.telegramChatIds ?? []).length}곳` : NOWHERE_TO_SEND;
     log(`계정: ${account} | 알림: ${notify}`);
     if (config.reserve) log('안전장치: 첫 예약 1건이 성공하면 즉시 감시를 종료합니다. 결제는 자동으로 진행하지 않습니다.');
     for (const warning of config.warnings ?? []) warn(`[경고] ${warning}`);

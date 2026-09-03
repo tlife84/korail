@@ -392,3 +392,28 @@ test('close는 여러 번 불러도 브라우저를 한 번만 닫는다', async
 
   assert.equal(run.closeCount, 1);
 });
+
+// ---------- 셸별 문구 ----------
+test('앱 셸에서는 터미널 대신 화면을 가리키는 문구를 쓴다', async () => {
+  const page = fakePage({
+    [ENDPOINTS.schedule]: scheduleOk([train()]),
+    [ENDPOINTS.seatMap]: SEATMAP_ONE_CAR,
+  });
+  const run = harness({ config: { ...configFor({ once: 'true' }), shell: 'app' }, page });
+  await run.watcher.start();
+
+  assert.ok(run.text.includes('계정: tester | 알림: 앱 화면만'));
+  assert.ok(run.text.includes('→ 공석! 앱 화면 알림: KTX 451(일반실)'));
+});
+
+test('셸을 지정하지 않으면 지금까지의 CLI 문구를 그대로 쓴다', async () => {
+  const page = fakePage({
+    [ENDPOINTS.schedule]: scheduleOk([train()]),
+    [ENDPOINTS.seatMap]: SEATMAP_ONE_CAR,
+  });
+  const run = harness({ config: configFor({ once: 'true' }), page });
+  await run.watcher.start();
+
+  assert.ok(run.text.includes('계정: tester | 알림: 터미널만'));
+  assert.ok(run.text.includes('→ 공석! 콘솔 알림(--no-telegram): KTX 451(일반실)'));
+});
