@@ -31,10 +31,21 @@ test('감시 시작 전 설정 화면을 닫으면 런처 종료를 알린다', 
   assert.match(html, /sendBeacon\('\/api\/close'\)/);
 });
 
-test('출발역과 도착역은 사전 입력된 역 콤보박스를 사용한다', () => {
-  assert.match(html, /<select name="from" required>[\s\S]*?<option value="광명" selected>광명<\/option>[\s\S]*?<option value="서대전">서대전<\/option>/);
-  assert.match(html, /<select name="to" required>[\s\S]*?<option value="광명">광명<\/option>[\s\S]*?<option value="서대전" selected>서대전<\/option>/);
-  assert.doesNotMatch(html, /<input name="(?:from|to)"/);
+test('출발역과 도착역은 이름과 초성을 검색하는 콤보박스를 사용한다', () => {
+  for (const name of ['from', 'to']) {
+    assert.match(html, new RegExp(`name="${name}"[^>]*role="combobox"`));
+    assert.match(html, new RegExp(`id="${name}-options"[^>]*role="listbox"`));
+  }
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)[1];
+  const start = script.indexOf('const stations =');
+  const end = script.indexOf("for (const field of document.querySelectorAll('.station-field'))");
+  const { stations, stationMatches } = new Function(`${script.slice(start, end)}; return { stations, stationMatches };`)();
+  assert.equal(new Set(stations).size, stations.length);
+  assert.ok(stations.length > 280);
+  for (const name of ['서울', '부산', '목포', '강릉', '여수EXPO']) assert.ok(stations.includes(name));
+  for (const query of ['', '서대', 'ㅅㄷㅈ', '서ㄷㅈ', ' ㅅㄷㅈ ']) assert.ok(stationMatches('서대전', query));
+  assert.ok(stationMatches('여수EXPO', 'expo'));
+  assert.equal(stationMatches('광명', 'ㅅㄷㅈ'), false);
 });
 
 test('계정과 텔레그램 설정을 화면에서 입력할 수 있다', () => {

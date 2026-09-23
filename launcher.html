@@ -49,7 +49,7 @@
     .span-6 { grid-column: span 6; }
     .span-8 { grid-column: span 8; }
     .span-12 { grid-column: 1 / -1; }
-    label.field { display: flex; flex-direction: column; gap: 8px; color: #3a455f; font-size: 13px; font-weight: 700; }
+    .field { display: flex; flex-direction: column; gap: 8px; color: #3a455f; font-size: 13px; font-weight: 700; }
     input, select {
       width: 100%;
       height: 46px;
@@ -64,6 +64,17 @@
       transition: border-color .15s, box-shadow .15s;
     }
     input:focus, select:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(21, 84, 209, .12); }
+    .station-field { position: relative; min-width: 0; }
+    .station-options {
+      position: absolute; top: 100%; left: 0; right: 0; z-index: 10;
+      max-height: 240px; overflow-y: auto; margin: 4px 0 0; padding: 4px;
+      list-style: none; border: 1px solid var(--line); border-radius: 11px;
+      background: white; box-shadow: var(--shadow);
+    }
+    .station-options [role="option"] { padding: 11px 12px; border-radius: 7px; cursor: pointer; }
+    .station-options [aria-selected="true"] { background: var(--blue-soft); color: var(--blue); }
+    .station-empty { padding: 11px 12px; color: var(--muted); }
+    .time-range { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 10px; }
     .hint { color: var(--muted); font-size: 12px; font-weight: 500; line-height: 1.45; min-height: 1em; }
     .optional { margin-left: 7px; padding: 3px 8px; border-radius: 999px; background: var(--blue-soft); color: var(--blue); font-size: 11px; font-weight: 800; vertical-align: 2px; }
     .section-lead { margin: -6px 0 16px; color: var(--muted); font-size: 13px; line-height: 1.6; }
@@ -193,28 +204,31 @@
           <label class="field span-4">승차일
             <input id="date" name="date" type="date" required>
           </label>
-          <label class="field span-4">출발역
-            <select name="from" required>
-              <option value="광명" selected>광명</option>
-              <option value="서대전">서대전</option>
-            </select>
-          </label>
-          <label class="field span-4">도착역
-            <select name="to" required>
-              <option value="광명">광명</option>
-              <option value="서대전" selected>서대전</option>
-            </select>
-          </label>
-          <label class="field span-3">출발 시각부터
-            <input name="time" type="text" value="00:00" placeholder="HH:MM" inputmode="numeric"
-              pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]" maxlength="5" title="24시간 형식으로 입력하세요. 예: 18:30" required>
+          <div class="field span-4 station-field">
+            <label for="from-station">출발역</label>
+            <input id="from-station" name="from" value="광명" required autocomplete="off"
+              role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="from-options"
+              placeholder="역 이름 또는 초성 검색">
+            <ul id="from-options" class="station-options" role="listbox" aria-label="출발역 목록" hidden></ul>
+          </div>
+          <div class="field span-4 station-field">
+            <label for="to-station">도착역</label>
+            <input id="to-station" name="to" value="서대전" required autocomplete="off"
+              role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="to-options"
+              placeholder="역 이름 또는 초성 검색">
+            <ul id="to-options" class="station-options" role="listbox" aria-label="도착역 목록" hidden></ul>
+          </div>
+          <div class="field span-6" role="group" aria-labelledby="departure-time-label">
+            <span id="departure-time-label">출발 시각(비워두면 00시부터 24시까지)</span>
+            <div class="time-range">
+              <input name="time" type="text" placeholder="HH:MM" inputmode="numeric" aria-label="출발 시작 시각"
+                pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]" maxlength="5" title="24시간 형식으로 입력하세요. 예: 18:30">
+              <span aria-hidden="true">~</span>
+              <input name="timeTo" type="text" placeholder="HH:MM" inputmode="numeric" aria-label="출발 종료 시각"
+                pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]" maxlength="5" title="24시간 형식으로 입력하세요. 예: 22:00">
+            </div>
             <span class="hint">24시간 형식 · 1830 입력 시 18:30으로 자동 교정</span>
-          </label>
-          <label class="field span-3">출발 시각까지
-            <input name="timeTo" type="text" placeholder="HH:MM" inputmode="numeric"
-              pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]" maxlength="5" title="24시간 형식으로 입력하세요. 예: 22:00">
-            <span class="hint">선택 입력 · 2200 입력 시 22:00으로 자동 교정</span>
-          </label>
+          </div>
           <label class="field span-3">특정 열차번호
             <input name="trains" type="text" inputmode="numeric" placeholder="예: 587,589">
             <span class="hint">비워두면 시간대 내 전체 열차</span>
@@ -382,6 +396,104 @@
     const backend = window.korail ?? httpBackend;
     const numberFields = ['adults', 'children', 'infants', 'seniors', 'interval'];
     const credentialFields = ['korailId', 'korailPw', 'telegramToken', 'telegramChatIds'];
+
+    // 코레일 예매 화면의 전체 역 목록 (2026-09-23).
+    // 출처: https://www.korail.com/public/st_info/station_data.json
+    const stations = ["가남", "가평", "각계", "감곡장호원", "강경", "강구", "강릉", "강진", "강촌", "개포", "경산", "경주", "계룡", "고래불", "고한", "곡성", "공주", "광명", "광양", "광주", "광주송정", "광천", "구례구", "구미", "구포", "군북", "군산", "군위", "극락강", "근덕", "기성", "기장", "김제", "김천", "김천구미", "나전", "나주", "남성현", "남원", "남창", "남춘천", "논산", "능주", "다시", "단양", "대곡", "대구", "대야", "대전", "대천", "덕소", "도계", "도고온천", "도라산", "동대구", "동백산", "동탄", "동해", "둔내", "득량", "마산", "마석", "만종", "매곡", "매화", "명봉", "목포", "몽탄", "무안", "묵호", "문경", "문산", "물금", "민둥산", "밀양", "반성", "백양리", "백양사", "벌교", "별어곡", "보성", "신보성", "봉양", "봉화", "부강", "부발", "부산", "부전", "북영천", "북울산", "북천", "분천", "비동", "사릉", "사북", "사상", "살미", "삼랑진", "삼례", "삼산", "삼척", "삼척해변", "삼탄", "삽교", "상동", "상봉", "상주", "서경주", "서광주", "서대구", "서대전", "서울", "서원주", "서정리", "서천", "서화성", "석불", "석포", "선평", "성환", "센텀", "송추", "수서", "수안보온천", "수원", "순천", "승부", "신기", "신동", "신례원", "신창", "신탄진", "신태인", "신해운대", "심천", "쌍룡", "아산", "아우라지", "아화", "안강", "안동", "안양", "안중", "앙성온천", "약목", "양동", "양원", "양평", "여수EXPO", "여천", "연산", "연풍", "영덕", "영동", "영등포", "영암", "영월", "영주", "영천", "영해", "예당", "예미", "예산", "예천", "오근장", "오산", "오송", "오수", "옥산", "옥수", "옥원", "옥천", "온양온천", "완사", "왕십리", "왜관", "용궁", "용문", "용산", "운천", "울산(통도사)", "울진", "웅천", "원동", "원릉", "원주", "월포", "음성", "의성", "의정부", "이양", "이원", "익산", "인주", "인천공항T1", "인천공항T2", "일로", "일신", "일영", "임기", "임성리", "임실", "임원", "임진강", "장사", "장성", "장항", "장흥", "장동", "전의", "전주", "전남장흥", "점촌", "정동진", "정선", "정읍", "제천", "조성", "조치원", "주덕", "죽변", "중리", "증평", "지탄", "지평", "진례", "진부(오대산)", "진상", "진영", "진주", "창원", "창원중앙", "천안", "천안아산", "철암", "청도", "청량리", "청리", "청소", "청주", "청주공항", "청평", "추암", "추풍령", "춘양", "춘천", "충주", "태백", "태화강", "퇴계원", "판교(경기)", "판교(충남)", "평내호평", "평창", "평택", "평택지제", "평해", "포항", "풍기", "하동", "하양", "한림정", "함안", "함열", "함창", "함평", "합덕", "해남", "행신", "향남", "현동", "홍성", "화명", "화성시청", "화순", "황간", "횡성", "횡천", "효천", "후포", "흥부"];
+    const initialConsonants = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ';
+    const normalizeStation = value => value.normalize('NFC').replace(/\s/g, '').toLowerCase();
+    const stationMatches = (name, query) => {
+      const text = normalizeStation(name);
+      const search = normalizeStation(query);
+      // 완성형 글자와 초성을 섞은 검색도 지원한다 (예: 서ㄷㅈ).
+      return [...text].some((_, start) => [...search].every((char, offset) => {
+        const target = text[start + offset];
+        if (!target) return false;
+        const code = target.charCodeAt(0) - 0xac00;
+        return char === target || (code >= 0 && code < 11172
+          && initialConsonants.includes(char) && initialConsonants[Math.floor(code / 588)] === char);
+      })) || !search;
+    };
+
+    for (const field of document.querySelectorAll('.station-field')) {
+      const input = field.querySelector('input');
+      const list = field.querySelector('[role="listbox"]');
+      let matches = [];
+      let active = -1;
+      const validate = () => input.setCustomValidity(stations.includes(input.value) ? '' : '목록에서 역을 선택하세요.');
+      const close = () => {
+        list.hidden = true;
+        input.setAttribute('aria-expanded', 'false');
+        input.removeAttribute('aria-activedescendant');
+      };
+      const highlight = index => {
+        active = index;
+        [...list.children].forEach((option, i) => option.setAttribute('aria-selected', String(i === active)));
+        if (active < 0) input.removeAttribute('aria-activedescendant');
+        else {
+          input.setAttribute('aria-activedescendant', list.children[active].id);
+          list.children[active].scrollIntoView({ block: 'nearest' });
+        }
+      };
+      const select = name => {
+        input.value = name;
+        validate();
+        close();
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        close();
+      };
+      const render = (query = '') => {
+        matches = stations.filter(name => stationMatches(name, query));
+        list.replaceChildren();
+        active = -1;
+        input.removeAttribute('aria-activedescendant');
+        for (const [index, name] of matches.entries()) {
+          const option = document.createElement('li');
+          option.id = `${list.id}-${index}`;
+          option.role = 'option';
+          option.setAttribute('aria-selected', 'false');
+          option.textContent = name;
+          option.addEventListener('pointerdown', event => event.preventDefault());
+          option.addEventListener('click', () => select(name));
+          list.append(option);
+        }
+        if (!matches.length) {
+          const empty = document.createElement('li');
+          empty.className = 'station-empty';
+          empty.setAttribute('role', 'status');
+          empty.textContent = '검색 결과가 없습니다.';
+          list.append(empty);
+        }
+        list.hidden = false;
+        list.scrollTop = 0;
+        input.setAttribute('aria-expanded', 'true');
+      };
+      input.addEventListener('focus', () => { input.select(); render(); });
+      input.addEventListener('click', () => { if (list.hidden) render(); });
+      input.addEventListener('input', () => { validate(); render(input.value); });
+      input.addEventListener('blur', () => {
+        const exact = stations.find(name => normalizeStation(name) === normalizeStation(input.value));
+        if (exact) { input.value = exact; input.dispatchEvent(new Event('change', { bubbles: true })); }
+        validate();
+        close();
+      });
+      input.addEventListener('keydown', event => {
+        if (event.isComposing) return;
+        if (event.key === 'Escape') { event.preventDefault(); close(); }
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          if (list.hidden) render();
+          if (matches.length) highlight((active + (event.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length);
+        }
+        if (event.key === 'Enter' && !list.hidden) {
+          event.preventDefault();
+          if (active >= 0) select(matches[active]);
+          else if (matches.length === 1) select(matches[0]);
+        }
+      });
+      validate();
+    }
+
     const timeFields = [form.elements.time, form.elements.timeTo];
     let watcherStarted = false;
     let savedCredentials = { fromEnvFile: {} };
